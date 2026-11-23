@@ -3,7 +3,7 @@ name: Build patched Kaku APK
 on:
   workflow_dispatch:
   push:
-    branches: [master, main]
+    branches: [master, main, patched-fixes]
 
 jobs:
   build:
