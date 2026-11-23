@@ -31,6 +31,9 @@ enum class ChoiceResultType
 }
 
 private const val KANA_PRIORITY_TAG = "kana_priority"
+private const val SUGGESTION_COLUMNS = 4
+private const val SUGGESTION_ROWS = 3
+
 private const val KANA_BLANK = '\u3000'
 
 private val HIRAGANA_ROWS = listOf(
@@ -49,9 +52,8 @@ class KanjiChoiceWindow(context: Context, windowCoordinator: WindowCoordinator) 
     private val choiceWindow = window.findViewById<RelativeLayout>(R.id.kanji_choice_window)!!
     private val currentKanjiViews = mutableListOf<View>()
 
-    private lateinit var mKanjiBoxParams : BoxParams
-
-    private var drawnOnTop = false
+    private var backdrop: View? = null
+    private var resultCallback: ((ChoiceResultType, String) -> Unit)? = null
 
     /**
      * KanjiChoiceWindow does not need to reInit layout as its getDefaultParams() are all relative. Re-initing will cause bugs.
@@ -62,126 +64,141 @@ class KanjiChoiceWindow(context: Context, windowCoordinator: WindowCoordinator) 
         super.reInit(options)
     }
 
-    fun onSquareScrollStart(squareChar: ISquareChar, kanjiBoxParams: BoxParams)
+    /**
+     * [callback] is used when the finger was lifted over empty space: the panel then stays open and the
+     * user taps an option (or taps outside to close it).
+     */
+    fun onSquareScrollStart(squareChar: ISquareChar, kanjiBoxParams: BoxParams, callback: (ChoiceResultType, String) -> Unit)
     {
-        if (squareChar !is SquareCharOcr)
+        closeAll(false)
+        resultCallback = callback
+
+        if (squareChar is SquareCharOcr)
         {
-            show()
-
-            mKanjiBoxParams = kanjiBoxParams
-            mKanjiBoxParams.y -= statusBarHeight
-
-            return
+            drawFixedLayout(squareChar)
         }
-
-        val topRectHeight = kanjiBoxParams.y - statusBarHeight
-        val bottomRectHeight = realDisplaySize.y - kanjiBoxParams.y - kanjiBoxParams.height - (realDisplaySize.y - viewHeight - statusBarHeight)
-
-        if (bottomRectHeight > topRectHeight)
-        {
-            drawnOnTop = false
-            drawOnBottom(squareChar, kanjiBoxParams, calculateBounds(kanjiBoxParams, topRectHeight, bottomRectHeight))
-        }
-        else
-        {
-            drawnOnTop = true
-            drawOnTop(squareChar, kanjiBoxParams, calculateBounds(kanjiBoxParams, topRectHeight, bottomRectHeight))
-        }
-
-        mKanjiBoxParams = kanjiBoxParams
-        mKanjiBoxParams.y -= statusBarHeight
 
         show()
     }
 
     fun onSquareScroll(e: MotionEvent) : Int
     {
-        var inKanji = false
+        val hovered = findSelectable(e)
 
         for (kanjiView in currentKanjiViews)
         {
-            val isTextView = kanjiView is TextView
-
-            if (checkForSelection(kanjiView, e) && isTextView)
+            if (isSelectable(kanjiView))
             {
-                inKanji = true
-                kanjiView.setBackgroundResource(R.drawable.bg_solid_border_0_blue_black)
-            }
-            else if (isTextView)
-            {
-                kanjiView.setBackgroundResource(
-                    if (kanjiView.tag == KANA_PRIORITY_TAG) R.drawable.bg_solid_border_0_yellow_black
-                    else R.drawable.bg_solid_border_0_white_black)
+                setCellBackground(kanjiView, kanjiView === hovered)
             }
         }
 
-        return when (getResultTypeForMotionEvent(e, inKanji, drawnOnTop))
+        return when ((hovered?.tag as? ChoiceResultType))
         {
-            ChoiceResultType.EDIT ->
-            {
-                R.drawable.icon_edit
-            }
-            ChoiceResultType.DELETE ->
-            {
-                R.drawable.icon_delete
-            }
-            else ->
-            {
-                R.drawable.icon_swap
-            }
+            ChoiceResultType.EDIT -> R.drawable.icon_edit
+            ChoiceResultType.DELETE -> R.drawable.icon_delete
+            else -> R.drawable.icon_swap
         }
     }
 
     fun onSquareScrollEnd(e: MotionEvent) : Pair<ChoiceResultType, String>
     {
-        var swappedKanji = ""
+        val hovered = findSelectable(e)
 
+        if (hovered != null)
+        {
+            val result = resultFor(hovered)
+            closeAll(true)
+            return result
+        }
+
+        // Finger lifted over nothing: keep the panel open so an option can be tapped
         for (kanjiView in currentKanjiViews)
         {
-            if (checkForSelection(kanjiView, e) && kanjiView is TextView)
+            if (isSelectable(kanjiView))
             {
-                swappedKanji = kanjiView.text.toString()
+                setCellBackground(kanjiView, false)
             }
         }
+        addBackdrop()
 
+        return Pair(ChoiceResultType.NONE, "")
+    }
+
+    private fun addBackdrop()
+    {
+        if (backdrop != null) return
+
+        val v = View(context)
+        v.setBackgroundColor(0x22000000)
+        v.setOnClickListener { finishWith(ChoiceResultType.NONE, "") }
+        choiceWindow.addView(v, 0, RelativeLayout.LayoutParams(
+                RelativeLayout.LayoutParams.MATCH_PARENT, RelativeLayout.LayoutParams.MATCH_PARENT))
+        backdrop = v
+    }
+
+    private fun finishWith(type: ChoiceResultType, text: String)
+    {
+        val callback = resultCallback
+        closeAll(true)
+        callback?.invoke(type, text)
+    }
+
+    private fun closeAll(hideWindow: Boolean)
+    {
         removeKanjiViews()
-        hide()
 
-        return Pair(getResultTypeForMotionEvent(e, swappedKanji != "", drawnOnTop), swappedKanji)
-    }
+        backdrop?.let { choiceWindow.removeView(it) }
+        backdrop = null
+        resultCallback = null
 
-    private fun getResultTypeForMotionEvent(e: MotionEvent, inKanji: Boolean, drawnOnTop: Boolean) : ChoiceResultType
-    {
-        if (inKanji)
+        if (hideWindow)
         {
-            return ChoiceResultType.SWAP
-        }
-
-        val midpoint = mKanjiBoxParams.x + (mKanjiBoxParams.width / 2)
-        val height = if (drawnOnTop) mKanjiBoxParams.y + mKanjiBoxParams.height + statusBarHeight else mKanjiBoxParams.y + statusBarHeight
-
-        return if (e.rawX < midpoint && heightCheckForResult(e, height, drawnOnTop))
-        {
-            ChoiceResultType.EDIT
-        }
-        else if (e.rawX > midpoint && heightCheckForResult(e, height, drawnOnTop))
-        {
-            ChoiceResultType.DELETE
-        }
-        else
-        {
-            ChoiceResultType.NONE
+            hide()
         }
     }
 
-    private fun heightCheckForResult(e: MotionEvent, height: Int, drawnOnTop: Boolean) : Boolean
+    private fun isSelectable(v: View): Boolean
     {
-        return if (drawnOnTop) e.rawY > height else e.rawY < height
+        return v is TextView || v.tag is ChoiceResultType
+    }
+
+    private fun findSelectable(e: MotionEvent): View?
+    {
+        for (kanjiView in currentKanjiViews)
+        {
+            if (isSelectable(kanjiView) && checkForSelection(kanjiView, e))
+            {
+                return kanjiView
+            }
+        }
+        return null
+    }
+
+    private fun resultFor(v: View): Pair<ChoiceResultType, String>
+    {
+        val tag = v.tag
+        return when
+        {
+            tag is ChoiceResultType -> Pair(tag, "")
+            v is TextView -> Pair(ChoiceResultType.SWAP, v.text.toString())
+            else -> Pair(ChoiceResultType.NONE, "")
+        }
+    }
+
+    private fun setCellBackground(v: View, hovered: Boolean)
+    {
+        v.setBackgroundResource(when
+        {
+            hovered -> R.drawable.bg_solid_border_0_blue_black
+            v.tag == KANA_PRIORITY_TAG -> R.drawable.bg_solid_border_0_yellow_black
+            else -> R.drawable.bg_solid_border_0_white_black
+        })
     }
 
     private fun checkForSelection(kanjiView: View, e: MotionEvent): Boolean
     {
-        var pos = IntArray(2)
+        val pos = IntArray(2)
         kanjiView.getLocationOnScreen(pos)
 
         return pos[0] < e.rawX && e.rawX < pos[0] + kanjiView.width &&
@@ -198,205 +215,79 @@ class KanjiChoiceWindow(context: Context, windowCoordinator: WindowCoordinator) 
         currentKanjiViews.clear()
     }
 
-    private fun calculateBounds(kanjiBoxParams: BoxParams, topRectHeight: Int, bottomRectHeight: Int) : BoxParams
-    {
-        val midPoint = kanjiBoxParams.x + (kanjiBoxParams.width / 2)
-        var maxWidth = dpToPx(context, 400)
-        var xPos = 0
-
-        if (realDisplaySize.x > maxWidth)
-        {
-            xPos = midPoint - (maxWidth / 2)
-            if (xPos < 0)
-            {
-                xPos = 0
-            }
-            else if (xPos + maxWidth > realDisplaySize.x)
-            {
-                xPos = realDisplaySize.x - maxWidth
-            }
-        }
-
-        maxWidth = minOf(realDisplaySize.x, maxWidth)
-
-        if (topRectHeight > bottomRectHeight)
-        {
-            return BoxParams(xPos, 0, maxWidth, topRectHeight)
-        }
-        else
-        {
-            return BoxParams(xPos, kanjiBoxParams.y + kanjiBoxParams.height - statusBarHeight, maxWidth, bottomRectHeight)
-        }
-    }
-
-    private fun drawOnBottom(squareChar: SquareCharOcr, kanjiBoxParams: BoxParams, choiceParams: BoxParams)
-    {
-        val kanjiHeight = kanjiBoxParams.height * 2
-        val kanjiWidth = kanjiBoxParams.width * 2
-
-        val outerPadding = dpToPx(context, 10)
-        val startHeight = choiceParams.y + outerPadding
-
-        val drawableWidth = choiceParams.width - outerPadding
-        val minPadding = dpToPx(context, 5)
-        val numColumns = minOf(calculateNumColumns(drawableWidth, kanjiWidth, minPadding), squareChar.allChoices.size + 1)
-        val outerSpacing = (choiceParams.width - (kanjiWidth + minPadding * 2) * numColumns) / 2
-        val innerSpacing = minPadding
-
-        var currColumn = 0
-        var currWidth = choiceParams.x + outerSpacing + innerSpacing
-        var currHeight = startHeight
-
-        drawKanjiImage(squareChar, currWidth, currHeight, kanjiWidth, kanjiHeight)
-        currWidth += kanjiWidth + innerSpacing
-        currColumn++
-
-        for (choice in squareChar.allChoices)
-        {
-            if (currColumn >= numColumns)
-            {
-                currHeight += kanjiHeight + innerSpacing
-                currWidth = choiceParams.x + outerSpacing + innerSpacing
-                currColumn = 0
-            }
-
-            drawKanjiText(choice.first, currWidth, currHeight, kanjiWidth, kanjiHeight)
-            currWidth += kanjiWidth + innerSpacing
-            currColumn++
-        }
-
-        val cols = maxOf(1, numColumns)
-        val rows = (squareChar.allChoices.size + cols) / cols
-        val gridLeft = choiceParams.x + outerSpacing + innerSpacing
-        val gridRight = gridLeft + cols * (kanjiWidth + innerSpacing)
-        drawKanaPanel(gridLeft, gridRight, startHeight, startHeight + rows * (kanjiHeight + innerSpacing),
-                choiceParams.y, choiceParams.y + choiceParams.height, false)
-    }
-
-    private fun drawOnTop(squareChar: SquareCharOcr, kanjiBoxParams: BoxParams, choiceParams: BoxParams)
-    {
-        val kanjiHeight = kanjiBoxParams.height * 2
-        val kanjiWidth = kanjiBoxParams.width * 2
-
-        val outerPadding = dpToPx(context, 10)
-        val startHeight = kanjiBoxParams.y - statusBarHeight - kanjiHeight - outerPadding
-
-        val drawableWidth = choiceParams.width - outerPadding
-        val minPadding = dpToPx(context, 5)
-        val numColumns = minOf(calculateNumColumns(drawableWidth, kanjiWidth, minPadding), squareChar.allChoices.size + 1)
-        val outerSpacing = (choiceParams.width - (kanjiWidth + minPadding * 2) * numColumns) / 2
-        val innerSpacing = minPadding
-
-        var currColumn = 0
-        var currWidth = choiceParams.x + outerSpacing + innerSpacing
-        var currHeight = startHeight
-
-        drawKanjiImage(squareChar, currWidth, currHeight, kanjiWidth, kanjiHeight)
-        currWidth += kanjiWidth + innerSpacing
-        currColumn++
-
-        for (choice in squareChar.allChoices)
-        {
-            if (currColumn >= numColumns)
-            {
-                currHeight -= kanjiHeight + innerSpacing
-                currWidth = choiceParams.x + outerSpacing + innerSpacing
-                currColumn = 0
-            }
-
-            drawKanjiText(choice.first, currWidth, currHeight, kanjiWidth, kanjiHeight)
-            currWidth += kanjiWidth + innerSpacing
-            currColumn++
-        }
-
-        val cols = maxOf(1, numColumns)
-        val rows = (squareChar.allChoices.size + cols) / cols
-        val gridLeft = choiceParams.x + outerSpacing + innerSpacing
-        val gridRight = gridLeft + cols * (kanjiWidth + innerSpacing)
-        drawKanaPanel(gridLeft, gridRight, startHeight - (rows - 1) * (kanjiHeight + innerSpacing), startHeight + kanjiHeight,
-                choiceParams.y, choiceParams.y + choiceParams.height, true)
-    }
-
     /**
-     * Permanent kana panel: the whole gojuon (hiragana and katakana) is always offered as swap targets,
-     * with the kana whose strokes are often split apart by the OCR tinted yellow. It goes in the free space
-     * beside the suggestion grid, or above/below it when the screen is too narrow for that.
+     * The panel always opens in the same place so it can be learned by muscle memory:
+     *   - top left: a row with the character image, edit, delete and close, and under it the suggestions
+     *   - next to it (wide screens) or below it (narrow screens): the whole hiragana and katakana set
      */
-    private fun drawKanaPanel(gridLeft: Int, gridRight: Int, gridTop: Int, gridBottom: Int,
-                              regionTop: Int, regionBottom: Int, onTop: Boolean)
+    private fun drawFixedLayout(squareChar: SquareCharOcr)
     {
         val pad = dpToPx(context, 6)
         val screenW = realDisplaySize.x
-        val maxCell = dpToPx(context, 44)
+        val sugCell = dpToPx(context, 52)
+        val sugCols = SUGGESTION_COLUMNS
+        val sugRows = SUGGESTION_ROWS
+        val zoneW = sugCols * sugCell
+        val zoneH = (1 + sugRows) * sugCell
+        val left = pad
+        val top = pad
 
-        val leftW = gridLeft - pad * 2
-        val rightW = screenW - gridRight - pad * 2
-        val sideIsRight = rightW >= leftW
-        val sideLayout = bestKanaLayout(maxOf(leftW, rightW), regionBottom - regionTop - pad * 2, maxCell)
+        // Row 0: character image, edit, delete, close
+        drawKanjiImage(squareChar, left, top, sugCell, sugCell)
+        drawActionCell(ChoiceResultType.EDIT, left + sugCell, top, sugCell)
+        drawActionCell(ChoiceResultType.DELETE, left + sugCell * 2, top, sugCell)
+        drawCloseCell(left + sugCell * 3, top, sugCell)
 
-        val dockTop = if (onTop) regionTop + pad else gridBottom + pad
-        val dockBottom = if (onTop) gridTop - pad else regionBottom - pad
-        val dockLayout = bestKanaLayout(screenW - pad * 2, dockBottom - dockTop, maxCell)
-
-        val useSide = sideLayout != null && (dockLayout == null || sideLayout.cell >= dockLayout.cell)
-        val layout = (if (useSide) sideLayout else dockLayout) ?: return
-        if (layout.cell < dpToPx(context, 14)) return
-
-        val cell = layout.cell
-        val panelW = layout.widthCells * cell
-        val panelH = layout.heightCells * cell
-
-        val x0: Int
-        val y0: Int
-        if (useSide)
+        // Rows 1..n: suggestions
+        val choices = squareChar.allChoices
+        for ((i, choice) in choices.withIndex())
         {
-            x0 = if (sideIsRight) gridRight + pad else gridLeft - pad - panelW
-            y0 = if (onTop) regionBottom - pad - panelH else regionTop + pad
+            if (i >= sugCols * sugRows) break
+            drawKanjiText(choice.first, left + (i % sugCols) * sugCell, top + (1 + i / sugCols) * sugCell, sugCell, sugCell)
+        }
+
+        // Kana: beside the suggestions if there is room, otherwise underneath
+        val maxKanaCell = dpToPx(context, 44)
+        val besideCell = minOf((screenW - left - zoneW - pad * 2) / 11, maxKanaCell)
+        val kanaCell: Int
+        val kanaX: Int
+        val kanaY: Int
+        if (besideCell >= dpToPx(context, 30))
+        {
+            kanaCell = besideCell
+            kanaX = left + zoneW + pad
+            kanaY = top
         }
         else
         {
-            x0 = (screenW - panelW) / 2
-            y0 = if (onTop) gridTop - pad - panelH else gridBottom + pad
+            kanaCell = minOf((screenW - pad * 2) / 11, maxKanaCell)
+            kanaX = (screenW - kanaCell * 11) / 2
+            kanaY = top + zoneH + pad
         }
 
+        if (kanaCell > 0)
+        {
+            drawKanaPanel(kanaX, kanaY, kanaCell)
+        }
+    }
+
+    private fun drawKanaPanel(x0: Int, y0: Int, cell: Int)
+    {
         for (block in 0..1)
         {
             val rowsOfKana = if (block == 0) HIRAGANA_ROWS else KATAKANA_ROWS
             val priority = if (block == 0) HIRAGANA_PRIORITY else KATAKANA_PRIORITY
-            val originX = if (layout.sideBySide) x0 + block * 6 * cell else x0
-            val originY = if (layout.sideBySide) y0 else y0 + block * 11 * cell
+            val originX = x0 + block * 6 * cell
 
             for ((r, rowChars) in rowsOfKana.withIndex())
             {
                 for ((c, ch) in rowChars.withIndex())
                 {
                     if (ch == KANA_BLANK) continue
-                    drawKanaCell(ch.toString(), originX + c * cell, originY + r * cell, cell,
+                    drawKanaCell(ch.toString(), originX + c * cell, y0 + r * cell, cell,
                             block == 0, priority.indexOf(ch) >= 0)
                 }
             }
-        }
-    }
-
-    private class KanaLayout(val cell: Int, val sideBySide: Boolean)
-    {
-        // hiragana + katakana are 5 columns x 10 rows each, with a one-cell gap between them
-        val widthCells = if (sideBySide) 11 else 5
-        val heightCells = if (sideBySide) 10 else 21
-    }
-
-    private fun bestKanaLayout(width: Int, height: Int, maxCell: Int): KanaLayout?
-    {
-        if (width <= 0 || height <= 0) return null
-
-        val sideBySide = minOf(width / 11, height / 10, maxCell)
-        val stacked = minOf(width / 5, height / 21, maxCell)
-
-        return when
-        {
-            sideBySide <= 0 && stacked <= 0 -> null
-            sideBySide >= stacked -> KanaLayout(sideBySide, true)
-            else -> KanaLayout(stacked, false)
         }
     }
 
@@ -413,19 +304,10 @@ class KanjiChoiceWindow(context: Context, windowCoordinator: WindowCoordinator) 
         if (priority)
         {
             tv.tag = KANA_PRIORITY_TAG
-            tv.setBackgroundResource(R.drawable.bg_solid_border_0_yellow_black)
         }
-        else
-        {
-            tv.setBackgroundResource(R.drawable.bg_solid_border_0_white_black)
-        }
+        setCellBackground(tv, false)
 
-        tv.width = size
-        tv.height = size
-        tv.x = x.toFloat()
-        tv.y = y.toFloat()
-        choiceWindow.addView(tv)
-        currentKanjiViews.add(tv)
+        addCell(tv, x, y, size, size)
     }
 
     private fun drawKanjiText(kanji: String, x: Int, y: Int, kanjiWidth: Int, kanjiHeight: Int)
@@ -437,19 +319,57 @@ class KanjiChoiceWindow(context: Context, windowCoordinator: WindowCoordinator) 
 
         when
         {
+            kanji.isEmpty() -> tv.setTextColor(Color.GRAY)
             LangUtils.IsHiragana(kanji[0]) -> tv.setTextColor(ContextCompat.getColor(context, R.color.kana_pink))
             LangUtils.IsKatakana(kanji[0]) -> tv.setTextColor(ContextCompat.getColor(context, R.color.kana_blue))
             LangUtils.IsKanji(kanji[0]) -> tv.setTextColor(Color.BLACK)
             else -> tv.setTextColor(Color.GRAY)
         }
 
-        tv.setBackgroundResource(R.drawable.bg_solid_border_0_white_black)
-        tv.width = kanjiWidth
-        tv.height = kanjiHeight
-        tv.x = x.toFloat()
-        tv.y = y.toFloat()
-        choiceWindow.addView(tv)
-        currentKanjiViews.add(tv)
+        setCellBackground(tv, false)
+        addCell(tv, x, y, kanjiWidth, kanjiHeight)
+    }
+
+    private fun drawActionCell(type: ChoiceResultType, x: Int, y: Int, size: Int)
+    {
+        val iv = ImageView(context)
+        val p = size / 5
+        iv.setPadding(p, p, p, p)
+        iv.scaleType = ImageView.ScaleType.FIT_CENTER
+        iv.setImageResource(if (type == ChoiceResultType.EDIT) R.drawable.icon_edit else R.drawable.icon_delete)
+        iv.tag = type
+        setCellBackground(iv, false)
+        addCell(iv, x, y, size, size)
+    }
+
+    private fun drawCloseCell(x: Int, y: Int, size: Int)
+    {
+        val tv = TextView(context)
+        tv.text = "\u2715"
+        tv.gravity = Gravity.CENTER
+        tv.setTextSize(TypedValue.COMPLEX_UNIT_PX, (size / 2.5).toFloat())
+        tv.setTextColor(Color.GRAY)
+        tv.tag = ChoiceResultType.NONE
+        setCellBackground(tv, false)
+        addCell(tv, x, y, size, size)
+    }
+
+    private fun addCell(v: View, x: Int, y: Int, width: Int, height: Int)
+    {
+        v.layoutParams = RelativeLayout.LayoutParams(width, height)
+        v.x = x.toFloat()
+        v.y = y.toFloat()
+
+        if (isSelectable(v))
+        {
+            v.setOnClickListener {
+                val result = resultFor(v)
+                finishWith(result.first, result.second)
+            }
+        }
+
+        choiceWindow.addView(v)
+        currentKanjiViews.add(v)
     }
 
     private fun drawKanjiImage(squareChar: SquareCharOcr, x: Int, y: Int, kanjiWidth: Int, kanjiHeight: Int)
@@ -458,14 +378,17 @@ class KanjiChoiceWindow(context: Context, windowCoordinator: WindowCoordinator) 
         val pos = squareChar.bitmapPos
         val dp10 = dpToPx(context, 10)
         val orig = squareChar.displayData.bitmap
-        var width = pos[2] - pos[0]
-        var height = pos[3] - pos[1]
-        width = if (width <= 0) 1 else width
-        height = if (height <= 0) 1 else height
-        val bitmapChar = Bitmap.createBitmap(orig, pos[0], pos[1], width, height)
+
+        // Keep the crop inside the screenshot (characters at the very edge could otherwise crash)
+        val cropX = pos[0].coerceIn(0, orig.width - 1)
+        val cropY = pos[1].coerceIn(0, orig.height - 1)
+        val width = (pos[2] - pos[0]).coerceIn(1, orig.width - cropX)
+        val height = (pos[3] - pos[1]).coerceIn(1, orig.height - cropY)
+
+        val bitmapChar = Bitmap.createBitmap(orig, cropX, cropY, width, height)
         val charImage = ImageView(context)
         charImage.setPadding(dp10, dp10, dp10, dp10)
-        charImage.layoutParams = LinearLayout.LayoutParams(kanjiWidth, kanjiHeight)
+        charImage.layoutParams = RelativeLayout.LayoutParams(kanjiWidth, kanjiHeight)
         charImage.x = x.toFloat()
         charImage.y = y.toFloat()
         charImage.scaleType = ImageView.ScaleType.FIT_CENTER
@@ -475,22 +398,6 @@ class KanjiChoiceWindow(context: Context, windowCoordinator: WindowCoordinator) 
         choiceWindow.addView(charImage)
         currentKanjiViews.add(charImage)
     }
-
-    private fun calculateNumColumns(drawableWidth: Int, columnWidth: Int, minPadding: Int) : Int
-    {
-        var count = 0
-        var width = 0
-        val columnAndPadding = columnWidth + (minPadding * 2)
-
-        while ((width + columnAndPadding) < drawableWidth)
-        {
-            width += columnAndPadding
-            count++
-        }
-
-        return count
-    }
-
 
     override fun onTouch(e: MotionEvent): Boolean
     {

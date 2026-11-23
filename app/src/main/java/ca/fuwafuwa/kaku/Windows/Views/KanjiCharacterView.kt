@@ -145,40 +145,45 @@ class KanjiCharacterView : FrameLayout, GestureDetector.OnGestureListener, IReca
                 mIconImageView.visibility = View.INVISIBLE
 
                 val choiceResult = mKanjiChoiceWindow.onSquareScrollEnd(e)
-                when (choiceResult.first)
-                {
-                    ChoiceResultType.SWAP ->
-                    {
-                        mKanjiTextView.text = choiceResult.second
-                        mSquareChar.text = choiceResult.second
-                        recalculateKanjiViews()
-                    }
-                    ChoiceResultType.EDIT ->
-                    {
-                        val window = getProperWindow<Window>()
-                        if (mSquareChar.displayData is DisplayDataOcr)
-                        {
-                            window.hide()
-                        }
-
-                        mEditWindow.setInfo(mSquareChar)
-                        mEditWindow.setInputDoneCallback(this)
-                        mEditWindow.show()
-                    }
-                    ChoiceResultType.DELETE ->
-                    {
-                        mSquareChar.text = ""
-                        recalculateKanjiViews()
-                    }
-                    ChoiceResultType.NONE ->
-                    {
-                        // Do nothing
-                    }
-                }
+                applyChoiceResult(choiceResult.first, choiceResult.second)
             }
         }
 
         return true
+    }
+
+    private fun applyChoiceResult(type: ChoiceResultType, text: String)
+    {
+        when (type)
+        {
+            ChoiceResultType.SWAP ->
+            {
+                mKanjiTextView.text = text
+                mSquareChar.text = text
+                recalculateKanjiViews()
+            }
+            ChoiceResultType.EDIT ->
+            {
+                val window = getProperWindow<Window>()
+                if (mSquareChar.displayData is DisplayDataOcr)
+                {
+                    window.hide()
+                }
+
+                mEditWindow.setInfo(mSquareChar)
+                mEditWindow.setInputDoneCallback(this)
+                mEditWindow.show()
+            }
+            ChoiceResultType.DELETE ->
+            {
+                mSquareChar.text = ""
+                recalculateKanjiViews()
+            }
+            ChoiceResultType.NONE ->
+            {
+                // Do nothing
+            }
+        }
     }
 
     override fun recalculateKanjiViews()
@@ -211,7 +216,7 @@ class KanjiCharacterView : FrameLayout, GestureDetector.OnGestureListener, IReca
             mIconImageView.visibility = View.VISIBLE
             mIconImageView.setImageResource(R.drawable.icon_swap)
 
-            mKanjiChoiceWindow.onSquareScrollStart(mSquareChar, getKanjiBoxParams())
+            mKanjiChoiceWindow.onSquareScrollStart(mSquareChar, getKanjiBoxParams()) { type, text -> applyChoiceResult(type, text) }
         }
         // scroll event continuing
         else {
