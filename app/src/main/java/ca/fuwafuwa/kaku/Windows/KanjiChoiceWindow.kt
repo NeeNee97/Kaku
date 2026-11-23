@@ -30,6 +30,20 @@ enum class ChoiceResultType
     NONE
 }
 
+private const val KANA_PRIORITY_TAG = "kana_priority"
+private const val KANA_BLANK = '\u3000'
+
+private val HIRAGANA_ROWS = listOf(
+        "あいうえお", "かきくけこ", "さしすせそ", "たちつてと", "なにぬねの",
+        "はひふへほ", "まみむめも", "や\u3000ゆ\u3000よ", "らりるれろ", "わ\u3000を\u3000ん")
+private val KATAKANA_ROWS = listOf(
+        "アイウエオ", "カキクケコ", "サシスセソ", "タチツテト", "ナニヌネノ",
+        "ハヒフヘホ", "マミムメモ", "ヤ\u3000ユ\u3000ヨ", "ラリルレロ", "ワ\u3000ヲ\u3000ン")
+
+// Kana whose strokes are often split apart by the OCR (highlighted in the panel). Edit freely.
+private const val HIRAGANA_PRIORITY = "うこたなにりけふいはほま"
+private const val KATAKANA_PRIORITY = "ンシツソリニミラルテハナケホ"
+
 class KanjiChoiceWindow(context: Context, windowCoordinator: WindowCoordinator) : Window(context, windowCoordinator, R.layout.window_kanji_choice)
 {
     private val choiceWindow = window.findViewById<RelativeLayout>(R.id.kanji_choice_window)!!
@@ -95,7 +109,9 @@ class KanjiChoiceWindow(context: Context, windowCoordinator: WindowCoordinator) 
             }
             else if (isTextView)
             {
-                kanjiView.setBackgroundResource(R.drawable.bg_solid_border_0_white_black)
+                kanjiView.setBackgroundResource(
+                    if (kanjiView.tag == KANA_PRIORITY_TAG) R.drawable.bg_solid_border_0_yellow_black
+                    else R.drawable.bg_solid_border_0_white_black)
             }
         }
 
@@ -248,6 +264,13 @@ class KanjiChoiceWindow(context: Context, windowCoordinator: WindowCoordinator) 
             currWidth += kanjiWidth + innerSpacing
             currColumn++
         }
+
+        val cols = maxOf(1, numColumns)
+        val rows = (squareChar.allChoices.size + cols) / cols
+        val gridLeft = choiceParams.x + outerSpacing + innerSpacing
+        val gridRight = gridLeft + cols * (kanjiWidth + innerSpacing)
+        drawKanaPanel(gridLeft, gridRight, startHeight, startHeight + rows * (kanjiHeight + innerSpacing),
+                choiceParams.y, choiceParams.y + choiceParams.height, false)
     }
 
     private fun drawOnTop(squareChar: SquareCharOcr, kanjiBoxParams: BoxParams, choiceParams: BoxParams)
@@ -285,6 +308,124 @@ class KanjiChoiceWindow(context: Context, windowCoordinator: WindowCoordinator) 
             currWidth += kanjiWidth + innerSpacing
             currColumn++
         }
+
+        val cols = maxOf(1, numColumns)
+        val rows = (squareChar.allChoices.size + cols) / cols
+        val gridLeft = choiceParams.x + outerSpacing + innerSpacing
+        val gridRight = gridLeft + cols * (kanjiWidth + innerSpacing)
+        drawKanaPanel(gridLeft, gridRight, startHeight - (rows - 1) * (kanjiHeight + innerSpacing), startHeight + kanjiHeight,
+                choiceParams.y, choiceParams.y + choiceParams.height, true)
+    }
+
+    /**
+     * Permanent kana panel: the whole gojuon (hiragana and katakana) is always offered as swap targets,
+     * with the kana whose strokes are often split apart by the OCR tinted yellow. It goes in the free space
+     * beside the suggestion grid, or above/below it when the screen is too narrow for that.
+     */
+    private fun drawKanaPanel(gridLeft: Int, gridRight: Int, gridTop: Int, gridBottom: Int,
+                              regionTop: Int, regionBottom: Int, onTop: Boolean)
+    {
+        val pad = dpToPx(context, 6)
+        val screenW = realDisplaySize.x
+        val maxCell = dpToPx(context, 44)
+
+        val leftW = gridLeft - pad * 2
+        val rightW = screenW - gridRight - pad * 2
+        val sideIsRight = rightW >= leftW
+        val sideLayout = bestKanaLayout(maxOf(leftW, rightW), regionBottom - regionTop - pad * 2, maxCell)
+
+        val dockTop = if (onTop) regionTop + pad else gridBottom + pad
+        val dockBottom = if (onTop) gridTop - pad else regionBottom - pad
+        val dockLayout = bestKanaLayout(screenW - pad * 2, dockBottom - dockTop, maxCell)
+
+        val useSide = sideLayout != null && (dockLayout == null || sideLayout.cell >= dockLayout.cell)
+        val layout = (if (useSide) sideLayout else dockLayout) ?: return
+        if (layout.cell < dpToPx(context, 14)) return
+
+        val cell = layout.cell
+        val panelW = layout.widthCells * cell
+        val panelH = layout.heightCells * cell
+
+        val x0: Int
+        val y0: Int
+        if (useSide)
+        {
+            x0 = if (sideIsRight) gridRight + pad else gridLeft - pad - panelW
+            y0 = if (onTop) regionBottom - pad - panelH else regionTop + pad
+        }
+        else
+        {
+            x0 = (screenW - panelW) / 2
+            y0 = if (onTop) gridTop - pad - panelH else gridBottom + pad
+        }
+
+        for (block in 0..1)
+        {
+            val rowsOfKana = if (block == 0) HIRAGANA_ROWS else KATAKANA_ROWS
+            val priority = if (block == 0) HIRAGANA_PRIORITY else KATAKANA_PRIORITY
+            val originX = if (layout.sideBySide) x0 + block * 6 * cell else x0
+            val originY = if (layout.sideBySide) y0 else y0 + block * 11 * cell
+
+            for ((r, rowChars) in rowsOfKana.withIndex())
+            {
+                for ((c, ch) in rowChars.withIndex())
+                {
+                    if (ch == KANA_BLANK) continue
+                    drawKanaCell(ch.toString(), originX + c * cell, originY + r * cell, cell,
+                            block == 0, priority.indexOf(ch) >= 0)
+                }
+            }
+        }
+    }
+
+    private class KanaLayout(val cell: Int, val sideBySide: Boolean)
+    {
+        // hiragana + katakana are 5 columns x 10 rows each, with a one-cell gap between them
+        val widthCells = if (sideBySide) 11 else 5
+        val heightCells = if (sideBySide) 10 else 21
+    }
+
+    private fun bestKanaLayout(width: Int, height: Int, maxCell: Int): KanaLayout?
+    {
+        if (width <= 0 || height <= 0) return null
+
+        val sideBySide = minOf(width / 11, height / 10, maxCell)
+        val stacked = minOf(width / 5, height / 21, maxCell)
+
+        return when
+        {
+            sideBySide <= 0 && stacked <= 0 -> null
+            sideBySide >= stacked -> KanaLayout(sideBySide, true)
+            else -> KanaLayout(stacked, false)
+        }
+    }
+
+    private fun drawKanaCell(kana: String, x: Int, y: Int, size: Int, hiragana: Boolean, priority: Boolean)
+    {
+        val tv = TextView(context)
+        tv.text = kana
+        tv.gravity = Gravity.CENTER
+        tv.includeFontPadding = false
+        tv.setPadding(0, 0, 0, 0)
+        tv.setTextSize(TypedValue.COMPLEX_UNIT_PX, (size / 1.5).toFloat())
+        tv.setTextColor(ContextCompat.getColor(context, if (hiragana) R.color.kana_pink else R.color.kana_blue))
+
+        if (priority)
+        {
+            tv.tag = KANA_PRIORITY_TAG
+            tv.setBackgroundResource(R.drawable.bg_solid_border_0_yellow_black)
+        }
+        else
+        {
+            tv.setBackgroundResource(R.drawable.bg_solid_border_0_white_black)
+        }
+
+        tv.width = size
+        tv.height = size
+        tv.x = x.toFloat()
+        tv.y = y.toFloat()
+        choiceWindow.addView(tv)
+        currentKanjiViews.add(tv)
     }
 
     private fun drawKanjiText(kanji: String, x: Int, y: Int, kanjiWidth: Int, kanjiHeight: Int)
