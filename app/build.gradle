@@ -17,6 +17,8 @@ android {
     def versionPrefix = "1.3"
     defaultConfig {
         applicationId "ca.fuwafuwa.kaku"
+        // Personal build: installs next to the F-Droid/Play version instead of replacing it
+        applicationIdSuffix ".patched"
         minSdkVersion 21
         targetSdkVersion 31
         versionCode 78

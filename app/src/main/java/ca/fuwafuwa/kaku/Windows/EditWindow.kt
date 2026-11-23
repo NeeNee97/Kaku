@@ -117,23 +117,36 @@ class EditWindow(context: Context, windowCoordinator: WindowCoordinator) : Windo
 
             Log.d(TAG, "After | Orig: (${orig.width}x${orig.height}) Box: ($xPos, $yPos) (${width}x${height})")
 
+            // The outline can land exactly on (or past) the right/bottom edge of the screenshot when the
+            // character is next to it, which made setPixel throw. Only draw pixels that are inside the bitmap.
+            val outlineBitmap: Bitmap = orig
+            val maxX = outlineBitmap.width - 1
+            val maxY = outlineBitmap.height - 1
+            fun mark(x: Int, y: Int)
+            {
+                if (x in 0..maxX && y in 0..maxY)
+                {
+                    outlineBitmap.setPixel(x, y, Color.RED)
+                }
+            }
+
             for (xTop in xPos until width + xPos)
             {
-                orig.setPixel(xTop, yPos, Color.RED)
+                mark(xTop, yPos)
             }
             for (xBottom in xPos until width + xPos)
             {
-                orig.setPixel(xBottom, yPos + height, Color.RED)
+                mark(xBottom, yPos + height)
             }
             for (yLeft in yPos until height + yPos)
             {
-                orig.setPixel(xPos, yLeft, Color.RED)
+                mark(xPos, yLeft)
             }
             for (yRight in yPos until height + yPos)
             {
-                orig.setPixel(xPos + width, yRight, Color.RED) // TODO: We're crashing here - investigate
+                mark(xPos + width, yRight)
             }
-            orig.setPixel(xPos + width, yPos + height, Color.RED)
+            mark(xPos + width, yPos + height)
 
             val avgSize = calculateMedianSquareSize(squareChar)
             val avgWidth = avgSize.x
@@ -148,6 +161,12 @@ class EditWindow(context: Context, windowCoordinator: WindowCoordinator) : Windo
             if (yPos < 0) yPos = 0
             if (width + xPos > orig.width) width = orig.width - xPos
             if (height + yPos > orig.height) height = orig.height - yPos
+
+            // Keep the crop inside the bitmap and at least 1px, otherwise createBitmap throws
+            xPos = xPos.coerceIn(0, orig.width - 1)
+            yPos = yPos.coerceIn(0, orig.height - 1)
+            width = width.coerceIn(1, orig.width - xPos)
+            height = height.coerceIn(1, orig.height - yPos)
 
             val bitmapChar = Bitmap.createBitmap(orig, xPos, yPos, width, height)
 

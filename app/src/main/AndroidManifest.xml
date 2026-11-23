@@ -27,7 +27,7 @@
 
         <activity
             android:name=".MainActivity"
-            android:label="Kaku"
+            android:label="Kaku (patched)"
             android:noHistory="false"
             android:launchMode="standard"
             android:screenOrientation="portrait"
