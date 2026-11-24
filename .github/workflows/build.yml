@@ -35,10 +35,27 @@ jobs:
           distribution: temurin
           java-version: '11'
 
+      - name: Prepare signing key (optional)
+        env:
+          KEYSTORE_B64: ${{ secrets.KAKU_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/kaku.keystore"
+            echo "KAKU_KEYSTORE=$RUNNER_TEMP/kaku.keystore" >> "$GITHUB_ENV"
+            echo "KAKU_KEYSTORE_PASSWORD=kakupatched" >> "$GITHUB_ENV"
+            echo "Using the fixed signing key"
+          else
+            echo "No signing key configured: the APK will be signed with a temporary debug key"
+          fi
+
       - name: Build debug APK
         run: |
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Show APK signature
+        run: |
+          "$ANDROID_HOME/build-tools/31.0.0/apksigner" verify --print-certs app/build/outputs/apk/debug/*.apk | grep -i "SHA-256\|Verifies"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

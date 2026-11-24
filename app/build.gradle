@@ -29,6 +29,19 @@ android {
         viewBinding true
     }
 
+    // Optional fixed signing key (set up by the cloud build) so new builds install over old ones
+    signingConfigs {
+        personal {
+            def ks = System.getenv("KAKU_KEYSTORE")
+            if (ks) {
+                storeFile file(ks)
+                storePassword System.getenv("KAKU_KEYSTORE_PASSWORD")
+                keyAlias "kaku"
+                keyPassword System.getenv("KAKU_KEYSTORE_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             debuggable false
@@ -37,6 +50,9 @@ android {
         }
         debug {
             debuggable true
+            if (System.getenv("KAKU_KEYSTORE")) {
+                signingConfig signingConfigs.personal
+            }
         }
     }
     packagingOptions {

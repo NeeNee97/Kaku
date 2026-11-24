@@ -34,6 +34,15 @@ private const val KANA_PRIORITY_TAG = "kana_priority"
 private const val SUGGESTION_COLUMNS = 4
 private const val SUGGESTION_ROWS = 3
 
+private const val KANA_TOGGLE_DAKUTEN = "kana_toggle_dakuten"
+private const val KANA_TOGGLE_HANDAKUTEN = "kana_toggle_handakuten"
+
+// Voiced (dakuten) and half-voiced (handakuten) versions, in the same order as their base kana
+private const val KANA_BASE_DAKUTEN = "かきくけこさしすせそたちつてとはひふへほカキクケコサシスセソタチツテトハヒフヘホウ"
+private const val KANA_VOICED = "がぎぐげござじずぜぞだぢづでどばびぶべぼガギグゲゴザジズゼゾダヂヅデドバビブベボヴ"
+private const val KANA_BASE_HANDAKUTEN = "はひふへほハヒフヘホ"
+private const val KANA_HALF_VOICED = "ぱぴぷぺぽパピプペポ"
+
 private const val KANA_BLANK = '\u3000'
 
 private val HIRAGANA_ROWS = listOf(
@@ -53,6 +62,13 @@ class KanjiChoiceWindow(context: Context, windowCoordinator: WindowCoordinator) 
     private val currentKanjiViews = mutableListOf<View>()
 
     private var backdrop: View? = null
+
+    // 0 = plain kana, 1 = dakuten (が ざ だ ば), 2 = handakuten (ぱ)
+    private var kanaMode = 0
+    private val kanaViews = mutableListOf<View>()
+    private var kanaPanelX = 0
+    private var kanaPanelY = 0
+    private var kanaPanelCell = 0
     private var resultCallback: ((ChoiceResultType, String) -> Unit)? = null
 
     /**
@@ -72,6 +88,7 @@ class KanjiChoiceWindow(context: Context, windowCoordinator: WindowCoordinator) 
     {
         closeAll(false)
         resultCallback = callback
+        kanaMode = 0
 
         if (squareChar is SquareCharOcr)
         {
@@ -105,11 +122,17 @@ class KanjiChoiceWindow(context: Context, windowCoordinator: WindowCoordinator) 
     {
         val hovered = findSelectable(e)
 
-        if (hovered != null)
+        if (hovered != null && !isToggle(hovered))
         {
             val result = resultFor(hovered)
             closeAll(true)
             return result
+        }
+
+        // Released over a voicing toggle: switch the kana rows and keep the panel open
+        if (hovered != null)
+        {
+            toggleKana(hovered.tag as String)
         }
 
         // Finger lifted over nothing: keep the panel open so an option can be tapped
@@ -180,6 +203,7 @@ class KanjiChoiceWindow(context: Context, windowCoordinator: WindowCoordinator) 
         val tag = v.tag
         return when
         {
+            isToggle(v) -> Pair(ChoiceResultType.NONE, "")
             tag is ChoiceResultType -> Pair(tag, "")
             v is TextView -> Pair(ChoiceResultType.SWAP, v.text.toString())
             else -> Pair(ChoiceResultType.NONE, "")
@@ -190,7 +214,7 @@ class KanjiChoiceWindow(context: Context, windowCoordinator: WindowCoordinator) 
     {
         v.setBackgroundResource(when
         {
-            hovered -> R.drawable.bg_solid_border_0_blue_black
+            hovered || isToggleActive(v) -> R.drawable.bg_solid_border_0_blue_black
             v.tag == KANA_PRIORITY_TAG -> R.drawable.bg_solid_border_0_yellow_black
             else -> R.drawable.bg_solid_border_0_white_black
         })
@@ -207,6 +231,7 @@ class KanjiChoiceWindow(context: Context, windowCoordinator: WindowCoordinator) 
 
     private fun removeKanjiViews()
     {
+        kanaViews.clear()
         for (k in currentKanjiViews)
         {
             choiceWindow.removeView(k)
@@ -267,12 +292,56 @@ class KanjiChoiceWindow(context: Context, windowCoordinator: WindowCoordinator) 
 
         if (kanaCell > 0)
         {
-            drawKanaPanel(kanaX, kanaY, kanaCell)
+            kanaPanelX = kanaX
+            kanaPanelY = kanaY
+            kanaPanelCell = kanaCell
+            drawKanaPanel()
         }
     }
 
-    private fun drawKanaPanel(x0: Int, y0: Int, cell: Int)
+    private fun isToggle(v: View): Boolean
     {
+        return v.tag == KANA_TOGGLE_DAKUTEN || v.tag == KANA_TOGGLE_HANDAKUTEN
+    }
+
+    private fun isToggleActive(v: View): Boolean
+    {
+        return (v.tag == KANA_TOGGLE_DAKUTEN && kanaMode == 1) ||
+               (v.tag == KANA_TOGGLE_HANDAKUTEN && kanaMode == 2)
+    }
+
+    private fun toggleKana(tag: String)
+    {
+        val target = if (tag == KANA_TOGGLE_DAKUTEN) 1 else 2
+        kanaMode = if (kanaMode == target) 0 else target
+
+        for (v in kanaViews)
+        {
+            choiceWindow.removeView(v)
+            currentKanjiViews.remove(v)
+        }
+        kanaViews.clear()
+        drawKanaPanel()
+    }
+
+    private fun voicedKana(ch: Char): Char
+    {
+        val i = when (kanaMode)
+        {
+            1 -> KANA_BASE_DAKUTEN.indexOf(ch)
+            2 -> KANA_BASE_HANDAKUTEN.indexOf(ch)
+            else -> -1
+        }
+        if (i < 0) return ch
+        return if (kanaMode == 1) KANA_VOICED[i] else KANA_HALF_VOICED[i]
+    }
+
+    private fun drawKanaPanel()
+    {
+        val x0 = kanaPanelX
+        val y0 = kanaPanelY
+        val cell = kanaPanelCell
+
         for (block in 0..1)
         {
             val rowsOfKana = if (block == 0) HIRAGANA_ROWS else KATAKANA_ROWS
@@ -284,11 +353,32 @@ class KanjiChoiceWindow(context: Context, windowCoordinator: WindowCoordinator) 
                 for ((c, ch) in rowChars.withIndex())
                 {
                     if (ch == KANA_BLANK) continue
-                    drawKanaCell(ch.toString(), originX + c * cell, y0 + r * cell, cell,
-                            block == 0, priority.indexOf(ch) >= 0)
+                    val shown = voicedKana(ch)
+                    drawKanaCell(shown.toString(), originX + c * cell, y0 + r * cell, cell,
+                            block == 0, shown == ch && priority.indexOf(ch) >= 0)
                 }
             }
+
+            // The empty cells in the や row hold the voicing toggles: ゛ then ゜
+            drawKanaToggle("\u309B", KANA_TOGGLE_DAKUTEN, originX + 1 * cell, y0 + 7 * cell, cell)
+            drawKanaToggle("\u309C", KANA_TOGGLE_HANDAKUTEN, originX + 3 * cell, y0 + 7 * cell, cell)
         }
+    }
+
+    private fun drawKanaToggle(label: String, tag: String, x: Int, y: Int, size: Int)
+    {
+        val tv = TextView(context)
+        tv.text = label
+        tv.gravity = Gravity.CENTER
+        tv.includeFontPadding = false
+        tv.setPadding(0, 0, 0, 0)
+        tv.setTextSize(TypedValue.COMPLEX_UNIT_PX, (size / 1.5).toFloat())
+        tv.setTextColor(Color.BLACK)
+        tv.tag = tag
+        setCellBackground(tv, false)
+
+        addCell(tv, x, y, size, size)
+        kanaViews.add(tv)
     }
 
     private fun drawKanaCell(kana: String, x: Int, y: Int, size: Int, hiragana: Boolean, priority: Boolean)
@@ -308,6 +398,7 @@ class KanjiChoiceWindow(context: Context, windowCoordinator: WindowCoordinator) 
         setCellBackground(tv, false)
 
         addCell(tv, x, y, size, size)
+        kanaViews.add(tv)
     }
 
     private fun drawKanjiText(kanji: String, x: Int, y: Int, kanjiWidth: Int, kanjiHeight: Int)
@@ -363,8 +454,15 @@ class KanjiChoiceWindow(context: Context, windowCoordinator: WindowCoordinator) 
         if (isSelectable(v))
         {
             v.setOnClickListener {
-                val result = resultFor(v)
-                finishWith(result.first, result.second)
+                if (isToggle(v))
+                {
+                    toggleKana(v.tag as String)
+                }
+                else
+                {
+                    val result = resultFor(v)
+                    finishWith(result.first, result.second)
+                }
             }
         }
 
