@@ -47,14 +47,14 @@ private const val KANA_BLANK = '\u3000'
 
 private val HIRAGANA_ROWS = listOf(
         "あいうえお", "かきくけこ", "さしすせそ", "たちつてと", "なにぬねの",
-        "はひふへほ", "まみむめも", "や\u3000ゆ\u3000よ", "らりるれろ", "わ\u3000を\u3000ん")
+        "はひふへほ", "まみむめも", "や\u3000ゆ\u3000よ", "らりるれろ", "わっを\u3000ん")
 private val KATAKANA_ROWS = listOf(
         "アイウエオ", "カキクケコ", "サシスセソ", "タチツテト", "ナニヌネノ",
-        "ハヒフヘホ", "マミムメモ", "ヤ\u3000ユ\u3000ヨ", "ラリルレロ", "ワ\u3000ヲ\u3000ン")
+        "ハヒフヘホ", "マミムメモ", "ヤ\u3000ユ\u3000ヨ", "ラリルレロ", "ワッヲ\u3000ン")
 
 // Kana whose strokes are often split apart by the OCR (highlighted in the panel). Edit freely.
-private const val HIRAGANA_PRIORITY = "うこたなにりけふいはほま"
-private const val KATAKANA_PRIORITY = "ンシツソリニミラルテハナケホ"
+private const val HIRAGANA_PRIORITY = "うこたなにりけふいはほまっ"
+private const val KATAKANA_PRIORITY = "ンシツソリニミラルテハナケホッ"
 
 class KanjiChoiceWindow(context: Context, windowCoordinator: WindowCoordinator) : Window(context, windowCoordinator, R.layout.window_kanji_choice)
 {
@@ -215,7 +215,7 @@ class KanjiChoiceWindow(context: Context, windowCoordinator: WindowCoordinator) 
         v.setBackgroundResource(when
         {
             hovered || isToggleActive(v) -> R.drawable.bg_solid_border_0_blue_black
-            v.tag == KANA_PRIORITY_TAG -> R.drawable.bg_solid_border_0_yellow_black
+            v.tag == KANA_PRIORITY_TAG || isToggle(v) -> R.drawable.bg_solid_border_0_yellow_black
             else -> R.drawable.bg_solid_border_0_white_black
         })
     }
