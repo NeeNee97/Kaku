@@ -10,3 +10,5 @@ Kaku is a fast, powerful Japanese dictionary that stays on top of all your apps.
 [<img src="https://play.google.com/intl/en_us/badges/images/generic/en-play-badge.png"
      alt="Get it on Google Play"
      height="80">](https://play.google.com/store/apps/details?id=ca.fuwafuwa.kaku)
+
+Fixes occasional crash when entering editor. Adds permanent kana to quick edit options.
